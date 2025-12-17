@@ -3,10 +3,13 @@
 # Load required libraries
 library(shiny)  # - interactive web applications with R
 library(adegenet)  # tools for the exploration of genetic and genomic data.
+library(ade4)  # Exploratory and Euclidean Methods in Environmental Sciences
 library(ggplot2)  # - data visualisation
 library(RColorBrewer)  # - colour palettes especially for thematic maps
 library(shinybusy)  # - indicators to show the user that the server is busy
 library(dplyr)  # tool for working with data frame like objects
+library(ape)  # - exploration of phylogenetic data,
+library(tibble)  # simple data frames
 
 # compoplot dimensions helper
 `%||%` <- function(x, y) {
@@ -52,7 +55,6 @@ ui <- fluidPage(
                mainPanel(    
                  plotOutput("dapcScatter", height = "600px"),
                  verbatimTextOutput("dapcSummary")
-                 #tableOutput("dapcAssign")
                ))),
     
     # tab 2:  DAPC scatterplot
@@ -82,14 +84,14 @@ ui <- fluidPage(
                  fileInput("fasta11", "Upload FASTA file (DNA barcodes)", accept = c(".fa", ".fasta")),
                  helpText("Upload an aligned FASTA of equal length sequences, with no outgroup. Ensure location label is the word after a single underscore in each header (e.g. >id_Region)."),
                  hr(),
-                 numericInput("nPcDAPC", code("number of orincipal components to retain for compoplot"), value = 10, min = 1, step = 1),
+                 numericInput("nPcDAPC", code("number of principal components to retain for compoplot"), value = 10, min = 1, step = 1),
                  numericInput("nDa2", code("number of discriminant functions to retain for compoplot"), value = 2, min = 1, step = 1),
                  actionButton("go", strong("Run DAPC")),
                  hr(),
                  selectInput("palette2", "Colour palette:",
                              choices = c("Set1", "Set2", "Set3", "Paired", "Dark2", "Accent"),
                              selected = "Set3"),
-                 numericInput("plot_w", "Download width (pixels)", value = 2000, min = 200, step = 50),
+                 numericInput("plot_w", "Download width (pixels)", value = 1500, min = 200, step = 50),
                  numericInput("plot_h", "Download height (pixels)", value = 600, min = 200, step = 50),
                  width = 3
                ),
@@ -156,7 +158,7 @@ server <- function(input, output, session) {
                        error = function(e) { showNotification(paste("find.clusters failed:", e$message), type = "error"); NULL })
     # find.clustersreduces dimensionality with Principal Component Analysis (PCA), then applies k-means clustering on the retained principal components.  
     # The function computes the Bayesian Information Criterion (BIC) for different values of k. 
-    #The optimal number of clusters is usually the k where BIC reaches its minimum or levels off.  
+    # The optimal number of clusters is usually the k where BIC reaches its minimum or levels off.  
     # These clusters can then be used as the grouping factor in DAPC.
     fc_raw_str <- if (!is.null(fc_raw)) paste(capture.output(str(fc_raw, max.level = 2)), collapse = "\n") else "NULL"
     fc <- NULL
@@ -265,7 +267,7 @@ server <- function(input, output, session) {
         }
       }
       
-      # Final fallback: use parsed FASTA header groups (samples_and_groups)
+      # Fallback: use parsed FASTA header groups (samples_and_groups)
       if (is.null(out_df)) {
         sg <- tryCatch(samples_and_groups(), error = function(e) NULL)
         if (!is.null(sg) && nrow(sg) > 0) {
@@ -376,10 +378,9 @@ server <- function(input, output, session) {
       
       dapc_obj <- res$dapc
       
-      # Determine width/height/resolution (adjust as desired)
+      # Determine width/height/resolution
       png(file, width = 1200, height = 900, res = 150)
       
-      # If your UI allowed choosing axes and you want to use them:
       # attempt to extract chosen axes and draw a scatter of those axes if possible
       use_axes <- FALSE
       xax <- NULL; yax <- NULL
@@ -760,7 +761,6 @@ server <- function(input, output, session) {
       prior_group_ord <- prior_group[ord]
       
       K7 <- ncol(post_ord)
-      #cols7 <- rainbow(K7)
       basePal7 <- RColorBrewer::brewer.pal(max(3, min(12, K7)), input$palette2)
       if (K7 > length(basePal7)) basePal <- colorRampPalette(basePal7)(K7)
       cols7 <- setNames(basePal7[seq_len(K7)], levels(prior_group))
@@ -800,7 +800,7 @@ server <- function(input, output, session) {
   )
   
   
-  #2.a design the DAPC
+  #2.a. design the DAPC
   output$dapcSummary2 <- renderPrint({
     res7 <- dapc_result(); req(res7)
     if (is.null(res7$dapc)) { cat("DAPC failed or not run.\n"); return() }
@@ -829,4 +829,3 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui, server)
-
