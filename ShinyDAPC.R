@@ -27,7 +27,7 @@ ui <- fluidPage(
                height = "8px"),
   tabsetPanel(
     # tab 1: designing the DAPC
-    tabPanel("1.a. DAPC parameters",
+    tabPanel("1.a. Cluster-based DAPC: parameters",
              sidebarLayout(
                sidebarPanel(
                  fileInput("fasta9", "Upload FASTA file (DNA barcodes)", accept = c(".fa", ".fasta")),
@@ -58,7 +58,7 @@ ui <- fluidPage(
                ))),
     
     # tab 2:  DAPC scatterplot
-    tabPanel("1.b. DAPC Scatterplot",     
+    tabPanel("1.b. Cluster-based DAPC: Scatterplot",     
              sidebarLayout(
                sidebarPanel(
                  numericInput("xaxis", code("DAPC axis (x)"), value = 1, min = 1, step = 1),
@@ -78,7 +78,7 @@ ui <- fluidPage(
     # - Solid colors = clear assignment.
     # - Mixed colors = admixture or uncertainty.
     # - Group-level patterns reveal how populations are structured genetically.
-    tabPanel("2. Composition plot",
+    tabPanel("2. Location-based DAPC: Composition plot",
              sidebarLayout(  
                sidebarPanel(
                  fileInput("fasta11", "Upload FASTA file (DNA barcodes)", accept = c(".fa", ".fasta")),
@@ -127,6 +127,7 @@ server <- function(input, output, session) {
     cat("\nSequence lengths summary:\n"); print(summary(seq_lengths))
   })
   
+# take FASTA‑derived data, extract sample names, infer groups from the headers, and return a tidy data frame  
   samples_and_groups <- reactive({
     dna4 <- fasta_raw(); req(dna4)
     headers <- rownames(dna4)
@@ -138,6 +139,7 @@ server <- function(input, output, session) {
     data.frame(sample = headers, group = groups, stringsAsFactors = FALSE)
   })
   
+# convert fasta file to a genind object, align sample names with inferred groups, and attach those groups as populations
   genind_obj <- reactive({
     dna4 <- fasta_raw(); req(dna4)
     gi <- tryCatch(DNAbin2genind(dna4), error = function(e) { showNotification("DNAbin2genind error", type = "error"); NULL })
@@ -150,11 +152,12 @@ server <- function(input, output, session) {
     gi
   })
   
+# find clusters  
   clusters_res <- eventReactive(input$runClusters, {
     gi <- genind_obj(); req(gi)
     maxn <- as.integer(input$maxnclust); validate(need(!is.na(maxn) && maxn >= 1, "Set max.n.clust >=1"))
-    npca_auto <- min(50, max(1, nInd(gi) - 1), nLoc(gi))
-    fc_raw <- tryCatch(find.clusters(gi, max.n.clust = maxn, n.pca = npca_auto, choose.n.clust = FALSE),
+    npca_auto <- min(50, max(1, nInd(gi) - 1), nLoc(gi))    # choose a reasonable number of PCA axes
+    fc_raw <- tryCatch(find.clusters(gi, max.n.clust = maxn, n.pca = npca_auto, choose.n.clust = FALSE),  # disable the interactive cluster‑choice 
                        error = function(e) { showNotification(paste("find.clusters failed:", e$message), type = "error"); NULL })
     # find.clustersreduces dimensionality with Principal Component Analysis (PCA), then applies k-means clustering on the retained principal components.  
     # The function computes the Bayesian Information Criterion (BIC) for different values of k. 
@@ -170,7 +173,7 @@ server <- function(input, output, session) {
     } else {
       showNotification("find.clusters returned unexpected object. See diagnostics.", type = "error")
       message("find.clusters raw output:"); message(fc_raw_str)
-    }
+    }  # build a tidy table of samples and their assigned clusters
     clusters_table <- NULL
     if (!is.null(fc) && !is.null(fc$grp) && length(fc$grp) == nInd(gi)) {
       clusters_table <- data.frame(sample = indNames(gi), cluster = as.integer(fc$grp), stringsAsFactors = FALSE)
@@ -179,7 +182,7 @@ server <- function(input, output, session) {
   })
   
   
-  # server: show number of clusters found after find.clusters finishes
+  # show number of clusters found after find.clusters finishes
   output$clustersFound <- renderText({
     res <- clusters_res()
     if (is.null(res) || is.null(res$fc)) {
@@ -194,13 +197,15 @@ server <- function(input, output, session) {
       return(paste0("Clusters: ", nclust, sizes_text))
     }
     
-    # Fallback: derive from fc$grp if present
+    # fallback in case find.clusters() returned a minimal list, or above fallback converted an atomic vector into fc$grp
+    # derive from fc$grp if present
     if (!is.null(fc$grp)) {
       nclust <- length(unique(as.integer(fc$grp)))
       return(paste0("Clusters: ", nclust))
     }
     
-    # Fallback: derive from Kstat names if present
+    # fallback to the minimum BIC, if clustering fails or returns something odd
+    # derive from Kstat names if present
     if (!is.null(fc$Kstat) && !is.null(names(fc$Kstat))) {
       # choose the K with minimum BIC as the "found" cluster (optional heuristic)
       Kvals <- suppressWarnings(as.integer(gsub("K=", "", names(fc$Kstat))))
@@ -209,10 +214,10 @@ server <- function(input, output, session) {
         return(paste0("Clusters (best by BIC): ", bestK))
       }
     }
-    
     "Clusters: result available but number not determined"
   })
-  
+
+  # feedback to user    
   observeEvent(clusters_res(), {
     res <- clusters_res()
     if (is.null(res) || is.null(res$fc)) {
@@ -224,6 +229,7 @@ server <- function(input, output, session) {
     }
   })
   
+  # show table of clusters, with download option
   output$clustersTable <- renderTable({
     res <- clusters_res(); req(res)
     res$clusters_table
@@ -242,7 +248,7 @@ server <- function(input, output, session) {
         out_df <- cres$clusters_table
       }
       
-      # Fallback: if no clusters_table, try DAPC posterior assignments
+      # fallback if no clusters_table, try DAPC posterior assignments
       if (is.null(out_df)) {
         dres <- tryCatch(dapc_res(), error = function(e) NULL)
         if (!is.null(dres) && !is.null(dres$dapc) && !is.null(dres$dapc$assign)) {
@@ -267,7 +273,7 @@ server <- function(input, output, session) {
         }
       }
       
-      # Fallback: use parsed FASTA header groups (samples_and_groups)
+      # fallback if clustering hasn’t run: use parsed FASTA header groups (samples_and_groups)
       if (is.null(out_df)) {
         sg <- tryCatch(samples_and_groups(), error = function(e) NULL)
         if (!is.null(sg) && nrow(sg) > 0) {
@@ -282,7 +288,7 @@ server <- function(input, output, session) {
         return()
       }
       
-      # Coerce types sensibly
+      # Coerce types (i.e. the cluster column) sensibly
       out_df$sample <- as.character(out_df$sample)
       if (is.factor(out_df$cluster)) out_df$cluster <- as.character(out_df$cluster)
       cluster_int <- suppressWarnings(as.integer(out_df$cluster))
@@ -303,18 +309,24 @@ server <- function(input, output, session) {
   )
   
   
-  # 1.b. DAPC Scatterplot
+  # DAPC Scatterplot
   dapc_res <- eventReactive(input$runDAPC, {
     gi <- genind_obj(); req(gi)
+    # determine which grouping to use
     fc <- NULL; if (!is.null(clusters_res())) fc <- clusters_res()$fc
     if (!is.null(fc)) grp <- fc$grp else if (!is.null(pop(gi))) grp <- pop(gi) else { showNotification("No groups available", type = "error"); return(NULL) }
+    # validate user‑supplied n.pca and n.da
     npca <- as.integer(input$npca); nda <- as.integer(input$nda)
     validate(need(!is.null(npca) && npca >= 1, "n.pca >=1"), need(!is.null(nda) && nda >= 1, "n.da >=1"))
+    # compute the maximum allowed PCA and DA axes
     nind <- nInd(gi); ngroups3 <- length(unique(as.character(grp)))
     max_npca_allowed <- max(1, nind - ngroups3)
+    # in case too many PCs requested
     if (npca > max_npca_allowed) { npca <- max_npca_allowed; showNotification(paste("n.pca reduced to", npca), type = "message") }
     max_nda_allowed <- min(ngroups3 - 1, npca)
+    # in case too many DAs requested
     if (nda > max_nda_allowed) { nda <- max_nda_allowed; showNotification(paste("n.da reduced to", nda), type = "message") }
+    # run DAPC safely
     dapc_obj <- tryCatch(dapc(gi, pop = grp, n.pca = npca, n.da = nda), error = function(e) { showNotification(paste("dapc error:", e$message), type = "error"); NULL })
     list(dapc = dapc_obj, grp = grp, npca = npca, nda = nda)
   })
@@ -333,7 +345,7 @@ server <- function(input, output, session) {
     updateNumericInput(session, "yaxis", value = ifelse(input$yaxis <= nda, input$yaxis, ifelse(nda>=2, 2, 1)), min = 1, max = nda, step = 1)
   })
   
-  # Restored DAPC scatter: uses adegenet::scatter for default plotting
+  # DAPC scatterplot
   output$dapcScatter <- renderPlot({
     res <- dapc_res(); req(res)
     dapc_obj <- res$dapc; req(dapc_obj)
@@ -342,6 +354,7 @@ server <- function(input, output, session) {
     scatter(dapc_obj, posi.da = "bottomright", scree.pca = TRUE, cex = 2.5, clab = 0, pch=20, ratio.da=0.2, ratio.pca=0.2, leg=TRUE,)  # , cstar=0
   })
   
+  # DAPC assignment table 
   output$dapcAssign <- renderTable({
     res <- dapc_res(); if (is.null(res) || is.null(res$dapc)) return(data.frame(message = "No DAPC result"))
     dapc_obj <- res$dapc
@@ -418,7 +431,7 @@ server <- function(input, output, session) {
         # add legend on right
         legend("topright", inset = c(-0.25,0), legend = levels(grp), pt.bg = palette, pch = 21, title = "Group", xpd = TRUE)
       } else {
-        # fallback: use adegenet::scatter to reproduce the original app plot
+        # fallback if custom plotting fails: use adegenet::scatter to reproduce the original app plot
         tryCatch({
           scatter(dapc_obj, posi.da = "bottomright", scree.pca = TRUE, cex = 2, clab = 0.8)
         }, error = function(e) {
@@ -440,6 +453,8 @@ server <- function(input, output, session) {
     #cat("DAPC scatter coloured by FASTA locations (substring after underscore).")
   })
   
+  
+  #  1.b.publication‑ready ggplot
   output$dapcByLocation <- renderPlot({
     res <- dapc_res()
     req(res)
@@ -496,6 +511,7 @@ server <- function(input, output, session) {
   })
   
   
+  # download plot  
   output$downloadDapcByLocationPlot <- downloadHandler(
     filename = function() {
       paste0("dapc_by_location_", Sys.Date(), ".png")
@@ -569,7 +585,9 @@ server <- function(input, output, session) {
     }
   ) 
   
+  
   # 2. Compoplot
+#load Fasta into DNAbin object  
   seqs_dnabin <- reactive({
     req(input$fasta11)
     inFile <- input$fasta11$datapath
@@ -581,13 +599,14 @@ server <- function(input, output, session) {
     dna7
   })
   
+# get a usable genind object
   genind_obj2 <- reactive({
     dna7 <- seqs_dnabin()
     
     gi7 <- tryCatch({
       DNAbin2genind(dna7)
     }, error = function(e2) {
-      # Fallback: collapse each full sequence into a single categorical locus
+      # fallback if DNAbin2genind() fails: collapse each full sequence into a single categorical locus
       dna_char <- as.character(dna7)
       seqs7 <- apply(dna_char, 1, paste0, collapse = "")
       df7 <- data.frame(seq = as.factor(seqs7), stringsAsFactors = TRUE)
@@ -604,6 +623,7 @@ server <- function(input, output, session) {
     gi7
   })
   
+# parallel DAPC pipeline that uses FASTA‑derived groups instead of clusters
   # Extract groups from header names: the word immediately following the first underscore
   fasta_groups <- reactive({
     dna7 <- seqs_dnabin()
@@ -650,6 +670,7 @@ server <- function(input, output, session) {
     list(dapc = dapc_obj7, groups = groups7, gi = gi7)
   })
   
+# custom compoplot implementation  
   output$compoplot <- renderPlot({
     req(dapc_result())
     res7 <- dapc_result()
@@ -683,7 +704,7 @@ server <- function(input, output, session) {
     K7 <- ncol(post_ord)
     basePal7 <- RColorBrewer::brewer.pal(max(3, min(12, K7)), input$palette2)
     if (K7 > length(basePal7)) basePal7 <- colorRampPalette(basePal7)(K7)
-    cols7 <- setNames(basePal7[seq_len(K7)], levels(prior_group))
+    cols7 <- setNames(basePal7[seq_len(K7)], levels(prior_group)) # perhaps that should be: cols7 <- setNames(basePal7, colnames(post_ord))
     
     oldpar <- par(no.readonly = TRUE)
     on.exit(par(oldpar), add = TRUE)
@@ -718,7 +739,7 @@ server <- function(input, output, session) {
     box()
     
   },
-  width = reactive({ max(200, input$plot_w %||% 1400) }),
+  width = reactive({ max(200, input$plot_w %||% 1500) }),
   height = reactive({ max(200, input$plot_h %||% 1000) })
   )
   
@@ -810,7 +831,8 @@ server <- function(input, output, session) {
   observe({
     res7 <- dapc_result()
     if (is.null(res7) || is.null(res7$n.Da)) return()
-    n.Da <- as.integer(res7$n.Da)
+    #n.Da <- as.integer(res7$n.Da)
+    n.Da <- res7$dapc$n.da
     updateNumericInput(session, "xaxis", value = min(input$xaxis, n.Da), min = 1, max = n.Da, step = 1)
     updateNumericInput(session, "yaxis", value = ifelse(input$yaxis <= n.Da, input$yaxis, ifelse(n.Da>=2, 2, 1)), min = 1, max = n.Da, step = 1)
   })
